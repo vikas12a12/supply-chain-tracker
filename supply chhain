@@ -1,0 +1,127 @@
+# app.py
+import json
+import hashlib
+import time
+import uuid
+import os
+from flask import Flask, request, jsonify, send_file, make_response
+
+########################################
+# Simple on-disk blockchain + products
+########################################
+
+CHAIN_FILE = 'chain.json'
+PRODUCTS_FILE = 'products.json'
+
+def _now_ts():
+    return time.time()
+
+def _ensure_file(path, default):
+    if not os.path.exists(path):
+        with open(path, 'w') as f:
+            json.dump(default, f, indent=2)
+
+class SimpleBlockchain:
+    def _init_(self, chain_file=CHAIN_FILE):
+        self.chain_file = chain_file
+        _ensure_file(self.chain_file, {'chain': []})
+        with open(self.chain_file, 'r') as f:
+            data = json.load(f)
+        if not data.get('chain'):
+            self.chain = [self._create_genesis_block()]
+            self._persist()
+        else:
+            self.chain = data['chain']
+
+    def _create_genesis_block(self):
+        block = {
+            'index': 0,
+            'timestamp': _now_ts(),
+            'transactions': [],
+            'previous_hash': '0',
+            'nonce': 0
+        }
+        block['hash'] = self._hash_block(block)
+        return block
+
+    def _hash_block(self, block):
+        # deterministic ordering, exclude 'hash' key
+        block_copy = {k: block[k] for k in sorted(block.keys()) if k != 'hash'}
+        block_string = json.dumps(block_copy, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(block_string.encode()).hexdigest()
+
+    def _persist(self):
+        with open(self.chain_file, 'w') as f:
+            json.dump({'chain': self.chain}, f, indent=2)
+
+    def add_block(self, transactions):
+        last = self.chain[-1]
+        block = {
+            'index': last['index'] + 1,
+            'timestamp': _now_ts(),
+            'transactions': transactions,
+            'previous_hash': last['hash'],
+            'nonce': 0
+        }
+        block['hash'] = self._hash_block(block)
+        self.chain.append(block)
+        self._persist()
+        return block
+
+    def add_transaction_as_block(self, tx):
+        return self.add_block([tx])
+
+    def get_chain(self):
+        return self.chain
+
+    def get_product_history(self, product_id):
+        history = []
+        for block in self.chain:
+            for tx in block.get('transactions', []):
+                if tx.get('product_id') == product_id:
+                    history.append({
+                        'block_index': block['index'],
+                        'block_hash': block['hash'],
+                        'timestamp': tx.get('timestamp', block['timestamp']),
+                        'transaction': tx
+                    })
+        history.sort(key=lambda x: x['timestamp'])
+        return history
+
+########################################
+# Products helper
+########################################
+
+def ensure_products_file(path=PRODUCTS_FILE):
+    _ensure_file(path, {'products': {}})
+
+def add_product_record(product, path=PRODUCTS_FILE):
+    ensure_products_file(path)
+    with open(path, 'r') as f:
+        data = json.load(f)
+    data['products'][product['product_id']] = product
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def get_product_record(product_id, path=PRODUCTS_FILE):
+    ensure_products_file(path)
+    with open(path, 'r') as f:
+        data = json.load(f)
+    return data['products'].get(product_id)
+
+########################################
+# Flask app (single-file with embedded frontend)
+########################################
+
+app = Flask(_name_, static_folder='static', static_url_path='/static')
+bc = SimpleBlockchain()
+ensure_products_file()
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/create_product', methods=['POST'])
+def create_product():
+    data = request.get_json(force=True) if request.data else {}
+    product_id = data.get('product_id') or f'PR
